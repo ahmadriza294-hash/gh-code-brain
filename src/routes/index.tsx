@@ -47,7 +47,7 @@ type SelectedElement = { path: number[]; tag: string; label: string; width: numb
 type PreviewWidth = "100%" | "390px" | "768px";
 
 const STORAGE_KEY = "ghighais_workspace_v3";
-const FILE_HEADER = /^\s*(?:\/\/|#|<!--)?\s*([\w.\-/]+\.[a-zA-Z0-9]+)\s*:\s*(?:-->)?\s*$/;
+const FILE_HEADER = /^\s*(?:\/\/|#|<!--)?\s*((?:[\w.-]+\/)*[\w-]+\.[a-zA-Z0-9]+|\.[\w-]+)\s*:\s*(?:-->)?\s*$/;
 
 function parseMultiFile(text: string): FileMap {
   const lines = text.split(/\r?\n/);
@@ -139,19 +139,28 @@ const EDITOR_SCRIPT = String.raw`<script data-ghighais-editor>
 })();
 </script>`;
 
-function buildPreview(files: FileMap, editMode: boolean): string {
+function buildPreview(files: FileMap, editMode: boolean, isStreaming = false): string {
   const entryName = htmlEntry(files);
   if (!entryName) return "";
   const source = files[entryName];
   if (!source) return "";
+  const localScripts: string[] = [];
   let html = source.replace(/<link[^>]+href=["']([^"']+\.css)["'][^>]*>/gi, (full, href: string) => {
     const key = Object.keys(files).find((name) => name.endsWith(href.replace(/^\.?\//, "")));
     return key && files[key] ? `<style>\n${files[key]}\n</style>` : full;
   });
   html = html.replace(/<script[^>]+src=["']([^"']+\.js)["'][^>]*>\s*<\/script>/gi, (full, src: string) => {
+    if (isStreaming) return "";
     const key = Object.keys(files).find((name) => name.endsWith(src.replace(/^\.?\//, "")));
-    return key && files[key] ? `<script>\n${files[key]}\n<\/script>` : full;
+    if (!key || !files[key]) return full;
+    localScripts.push(files[key]);
+    return "";
   });
+  if (isStreaming) html = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+  if (localScripts.length > 0) {
+    const scripts = `<script>\n${localScripts.join("\n\n")}\n<\/script>`;
+    html = html.includes("</body>") ? html.replace("</body>", `${scripts}</body>`) : `${html}${scripts}`;
+  }
   if (editMode) {
     const editorCss = `<style data-ghighais-editor>[data-gh-selected="true"]{outline:2px solid #00d98b!important;outline-offset:2px!important;resize:both!important;overflow:auto!important;cursor:move!important}</style>`;
     html = html.includes("</body>")
@@ -209,7 +218,7 @@ function Index() {
   const fileNames = Object.keys(files);
   const streaming = Object.keys(streamFiles).length > 0;
   const previewFiles = useMemo(() => (streaming ? { ...files, ...streamFiles } : files), [files, streamFiles, streaming]);
-  const preview = useMemo(() => buildPreview(previewFiles, editMode && !streaming), [previewFiles, editMode, streaming]);
+  const preview = useMemo(() => buildPreview(previewFiles, editMode && !streaming, streaming), [previewFiles, editMode, streaming]);
   const field = "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary";
 
   useEffect(() => {
@@ -273,34 +282,63 @@ function Index() {
     setProgress(2);
     setStreamFiles({});
     log(hasFiles ? "AI melanjutkan proyek aktif…" : "AI membuat proyek baru…");
+    let received = "";
+    let progressTimer: ReturnType<typeof setInterval> | undefined;
     try {
       const context = hasFiles
         ? Object.entries(files).map(([name, content]) => `${name}:\n${content}`).join("\n\n").slice(0, 55000)
         : undefined;
       const aiHistory = history.slice(-12).map((line) => ({ role: line.role, content: line.content }));
-      const response = await fetch("/api/ai/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, mode: hasFiles ? "fix" : "create", context, history: aiHistory }),
-      });
-      if (!response.ok || !response.body) {
-        throw new Error((await response.text()) || "Permintaan AI gagal.");
+      const requestBody = JSON.stringify({ prompt, mode: hasFiles ? "fix" : "create", context, history: aiHistory });
+      progressTimer = setInterval(() => {
+        setProgress((current) => (current < 28 ? current + 1 : current));
+      }, 1800);
+
+      let lastError = "Permintaan AI gagal.";
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const response = await fetch("/api/ai/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: requestBody,
+        });
+        if (!response.ok || !response.body) {
+          lastError = (await response.text()) || lastError;
+          if ((response.status === 429 || response.status >= 500) && attempt < 2) {
+            const retryAfter = Number(response.headers.get("Retry-After"));
+            const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1500 * 2 ** attempt;
+            log(`AI mencoba kembali (${attempt + 2}/3)…`);
+            await new Promise((resolve) => setTimeout(resolve, waitMs));
+            continue;
+          }
+          throw new Error(lastError);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            received += decoder.decode(value, { stream: true });
+            setProgress(Math.min(96, Math.max(30, Math.round((received.length / (received.length + 3500)) * 100))));
+            const partial = parseMultiFile(received);
+            if (Object.keys(partial).length > 0) setStreamFiles(partial);
+          }
+          received += decoder.decode();
+          break;
+        } catch (streamError) {
+          lastError = streamError instanceof Error ? streamError.message : lastError;
+          if (Object.keys(parseMultiFile(received)).length > 0) break;
+          if (attempt >= 2) throw streamError;
+          received = "";
+          log(`Aliran terputus, AI mencoba kembali (${attempt + 2}/3)…`);
+          await new Promise((resolve) => setTimeout(resolve, 1500 * 2 ** attempt));
+        }
       }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        setProgress(Math.min(96, Math.round((buffer.length / (buffer.length + 3500)) * 100)));
-        const partial = parseMultiFile(buffer);
-        if (Object.keys(partial).length > 0) setStreamFiles(partial);
-      }
-      buffer += decoder.decode();
-      if (!buffer.trim()) throw new Error("AI mengembalikan hasil kosong.");
-      let parsed = parseMultiFile(buffer);
-      if (Object.keys(parsed).length === 0) parsed = { "index.html": buffer };
+
+      if (!received.trim()) throw new Error(lastError);
+      let parsed = parseMultiFile(received);
+      if (Object.keys(parsed).length === 0) parsed = { "index.html": received };
       const delivered = Object.keys(parsed);
       setFiles((current) => ensureGitignore({ ...current, ...parsed }).files);
       setProgress(100);
@@ -310,11 +348,24 @@ function Index() {
       ]);
       log(`AI memperbarui: ${delivered.join(", ")}`, "success");
     } catch (error) {
+      const partial = parseMultiFile(received);
+      if (Object.keys(partial).length > 0) {
+        const delivered = Object.keys(partial);
+        setFiles((current) => ensureGitignore({ ...current, ...partial }).files);
+        setProgress(100);
+        setHistory((current) => [
+          ...current,
+          { id: crypto.randomUUID(), role: "assistant", content: `Hasil yang sudah selesai dipulihkan — ${delivered.length} file diperbarui.`, files: delivered },
+        ]);
+        log(`Hasil generate dipulihkan: ${delivered.join(", ")}`, "success");
+        return;
+      }
       const message = error instanceof Error ? error.message : "Permintaan AI gagal.";
       setHistory((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: `Gagal: ${message}` }]);
       log(message, "error");
       setProgress(0);
     } finally {
+      if (progressTimer) clearInterval(progressTimer);
       setAiBusy(false);
       setStreamFiles({});
     }
