@@ -1,6 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useRef, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import { useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
+import { generateProject } from "@/lib/ai.functions";
+import { pushToGithub } from "@/lib/github";
 
 export const Route = createFileRoute("/")({
   head: () => ({
