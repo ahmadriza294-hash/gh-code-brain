@@ -432,6 +432,19 @@ function Index() {
             {aiBusy ? <LoaderCircle className="animate-spin" /> : <Send />}
           </Button>
         </div>
+        {(aiBusy || progress > 0) && (
+          <div className="mt-3">
+            <div className="mb-1 flex items-center justify-between text-[11px] uppercase tracking-widest">
+              <span className="text-muted-foreground">
+                {aiBusy ? (streaming ? "Menulis kode & menampilkan ke preview…" : "AI berpikir…") : "Generate selesai"}
+              </span>
+              <span className="font-bold text-primary">{progress}%</span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+              <div className="h-full rounded-full bg-primary transition-[width] duration-300" style={{ width: `${progress}%` }} />
+            </div>
+          </div>
+        )}
       </section>
 
       <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(300px,0.75fr)_minmax(0,1.6fr)]">
