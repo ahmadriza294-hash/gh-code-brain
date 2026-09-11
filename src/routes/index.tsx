@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
 import { generateProject } from "@/lib/ai.functions";
 import { pushToGithub } from "@/lib/github";
+import { ensureGitignore } from "@/lib/gitignore-template";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -127,7 +128,12 @@ function Index() {
       });
       let parsed = parseMultiFile(res.text);
       if (Object.keys(parsed).length === 0) parsed = { "index.html": res.text };
-      setFiles((prev) => ({ ...prev, ...parsed }));
+      setFiles((prev) => {
+        const merged = { ...prev, ...parsed };
+        const gi = ensureGitignore(merged);
+        if (gi.added) log("Auto-added comprehensive .gitignore", "info");
+        return gi.files;
+      });
       log(`AI delivered ${Object.keys(parsed).length} file(s): ${Object.keys(parsed).join(", ")}`, "success");
     } catch (e) {
       log(e instanceof Error ? e.message : "AI request failed.", "error");
@@ -145,10 +151,15 @@ function Index() {
     localStorage.setItem("gh_token", token.trim());
     localStorage.setItem("gh_repo", target);
     try {
+      const gi = ensureGitignore(files);
+      if (gi.added) {
+        setFiles(gi.files);
+        log("Auto-added comprehensive .gitignore before push", "info");
+      }
       const out = await pushToGithub({
         token: token.trim(),
         repo: target,
-        files,
+        files: gi.files,
         message: commitMsg,
         onLog: (m) => log(m),
       });
@@ -165,8 +176,10 @@ function Index() {
     if (!fullCode.trim()) return log("Nothing to generate — paste project code first.", "error");
     let parsed = parseMultiFile(fullCode);
     if (Object.keys(parsed).length === 0) parsed = { "index.html": fullCode };
-    setFiles(parsed);
-    log(`Generated ${Object.keys(parsed).length} file(s): ${Object.keys(parsed).join(", ")}`, "success");
+    const gi = ensureGitignore(parsed);
+    setFiles(gi.files);
+    log(`Generated ${Object.keys(gi.files).length} file(s): ${Object.keys(gi.files).join(", ")}`, "success");
+    if (gi.added) log("Auto-added comprehensive .gitignore", "info");
   };
 
   const loadZip = async (file: File) => {
@@ -210,8 +223,13 @@ function Index() {
 
   const download = async () => {
     if (fileNames.length === 0) return log("Nothing to export yet.", "error");
+    const gi = ensureGitignore(files);
+    if (gi.added) {
+      setFiles(gi.files);
+      log("Auto-added comprehensive .gitignore to export", "info");
+    }
     const zip = new JSZip();
-    for (const [name, content] of Object.entries(files)) zip.file(name, content);
+    for (const [name, content] of Object.entries(gi.files)) zip.file(name, content);
     const blob = await zip.generateAsync({ type: "blob" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
