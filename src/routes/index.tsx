@@ -181,7 +181,7 @@ function applyInlineStyle(files: FileMap, path: number[], style: string): FileMa
 }
 
 function Index() {
-  const iframeRef2 = null as unknown as never;
+  
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const restored = useRef(false);
   const [tab, setTab] = useState<ToolTab>("build");
