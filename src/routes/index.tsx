@@ -1,7 +1,23 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
+import {
+  Bot,
+  BoxSelect,
+  Code2,
+  Download,
+  Eye,
+  Github,
+  Hammer,
+  LoaderCircle,
+  Maximize2,
+  MousePointer2,
+  Send,
+  Trash2,
+  Upload,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { generateProject } from "@/lib/ai.functions";
 import { pushToGithub } from "@/lib/github";
 import { ensureGitignore } from "@/lib/gitignore-template";
@@ -9,17 +25,15 @@ import { ensureGitignore } from "@/lib/gitignore-template";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "GHIGHAIS BRAIN | Smart Merge Code Workspace" },
+      { title: "GHIGHAIS BRAIN | AI App Builder" },
       {
         name: "description",
-        content:
-          "Build projects from pasted code, smart-patch files inside a ZIP, preview live and export a ready-to-ship archive.",
+        content: "Bangun, lanjutkan, edit visual, preview, ekspor, dan push proyek web dengan AI canggih.",
       },
-      { property: "og:title", content: "GHIGHAIS BRAIN | Smart Merge" },
+      { property: "og:title", content: "GHIGHAIS BRAIN | AI App Builder" },
       {
         property: "og:description",
-        content:
-          "Paste full project code or patch files inside an uploaded ZIP, preview instantly, download the result.",
+        content: "Workspace AI berkelanjutan dengan editor visual langsung dan ekspor GitHub.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
@@ -29,7 +43,12 @@ export const Route = createFileRoute("/")({
 });
 
 type FileMap = Record<string, string>;
+type ToolTab = "build" | "patch";
+type ChatLine = { id: string; role: "user" | "assistant"; content: string; files?: string[] };
+type SelectedElement = { path: number[]; tag: string; label: string; width: number; height: number };
+type PreviewWidth = "100%" | "390px" | "768px";
 
+const STORAGE_KEY = "ghighais_workspace_v3";
 const FILE_HEADER = /^\s*(?:\/\/|#|<!--)?\s*([\w.\-/]+\.[a-zA-Z0-9]+)\s*:\s*(?:-->)?\s*$/;
 
 function parseMultiFile(text: string): FileMap {
@@ -37,440 +56,437 @@ function parseMultiFile(text: string): FileMap {
   const out: FileMap = {};
   let current: string | null = null;
   let buffer: string[] = [];
-
   const flush = () => {
-    if (current) out[current] = buffer.join("\n").replace(/^\s*```[\w]*\s*\n?/, "").replace(/\n?```\s*$/, "").trim() + "\n";
+    if (!current) return;
+    out[current] = `${buffer.join("\n").replace(/^\s*```[\w]*\s*\n?/, "").replace(/\n?```\s*$/, "").trim()}\n`;
     buffer = [];
   };
-
   for (const line of lines) {
-    const m = line.match(FILE_HEADER);
-    if (m) {
+    const match = line.match(FILE_HEADER);
+    if (match?.[1]) {
       flush();
-      current = m[1]!;
-      continue;
-    }
-    if (current) buffer.push(line);
+      current = match[1];
+    } else if (current) buffer.push(line);
   }
   flush();
   return out;
 }
 
-function buildPreview(files: FileMap): string {
-  const entryName =
-    Object.keys(files).find((n) => n.toLowerCase().endsWith("index.html")) ??
-    Object.keys(files).find((n) => n.toLowerCase().endsWith(".html"));
-  if (!entryName) return "";
-  let html = files[entryName]!;
+function htmlEntry(files: FileMap) {
+  return (
+    Object.keys(files).find((name) => name.toLowerCase().endsWith("index.html")) ??
+    Object.keys(files).find((name) => name.toLowerCase().endsWith(".html"))
+  );
+}
 
-  html = html.replace(
-    /<link[^>]+href=["']([^"']+\.css)["'][^>]*>/gi,
-    (full, href: string) => {
-      const key = Object.keys(files).find((n) => n.endsWith(href.replace(/^\.?\//, "")));
-      return key ? `<style>\n${files[key]}\n</style>` : full;
-    },
-  );
-  html = html.replace(
-    /<script[^>]+src=["']([^"']+\.js)["'][^>]*>\s*<\/script>/gi,
-    (full, src: string) => {
-      const key = Object.keys(files).find((n) => n.endsWith(src.replace(/^\.?\//, "")));
-      return key ? `<script>\n${files[key]}\n</script>` : full;
-    },
-  );
+const EDITOR_SCRIPT = String.raw`<script data-ghighais-editor>
+(() => {
+  const send = (type, data = {}) => parent.postMessage({ source: 'ghighais-visual-editor', type, ...data }, '*');
+  const pathFor = (el) => {
+    const path = [];
+    while (el && el !== document.body) {
+      const parentEl = el.parentElement;
+      if (!parentEl) break;
+      path.unshift(Array.from(parentEl.children).indexOf(el));
+      el = parentEl;
+    }
+    return path;
+  };
+  let selected = null;
+  let dragging = false;
+  let startX = 0, startY = 0, startLeft = 0, startTop = 0;
+  const report = () => {
+    if (!selected) return;
+    const rect = selected.getBoundingClientRect();
+    send('selected', { path: pathFor(selected), tag: selected.tagName.toLowerCase(), label: (selected.textContent || selected.getAttribute('aria-label') || '').trim().slice(0, 44), width: Math.round(rect.width), height: Math.round(rect.height) });
+  };
+  document.addEventListener('click', (event) => {
+    event.preventDefault(); event.stopPropagation();
+    if (selected) selected.removeAttribute('data-gh-selected');
+    selected = event.target;
+    if (selected === document.documentElement || selected === document.body) return;
+    selected.setAttribute('data-gh-selected', 'true');
+    report();
+  }, true);
+  document.addEventListener('pointerdown', (event) => {
+    if (!selected || event.target !== selected) return;
+    const rect = selected.getBoundingClientRect();
+    if (event.clientX > rect.right - 18 && event.clientY > rect.bottom - 18) return;
+    dragging = true; startX = event.clientX; startY = event.clientY;
+    startLeft = parseFloat(selected.style.left) || 0; startTop = parseFloat(selected.style.top) || 0;
+    selected.setPointerCapture(event.pointerId);
+  }, true);
+  document.addEventListener('pointermove', (event) => {
+    if (!dragging || !selected) return;
+    selected.style.position = selected.style.position === 'absolute' || selected.style.position === 'fixed' ? selected.style.position : 'relative';
+    selected.style.left = Math.round(startLeft + event.clientX - startX) + 'px';
+    selected.style.top = Math.round(startTop + event.clientY - startY) + 'px';
+  }, true);
+  document.addEventListener('pointerup', () => { if (dragging) { dragging = false; report(); send('style', { path: pathFor(selected), style: selected.getAttribute('style') || '' }); } }, true);
+  new ResizeObserver((entries) => {
+    if (!selected || !entries.some((entry) => entry.target === selected)) return;
+    clearTimeout(window.__ghResizeTimer);
+    window.__ghResizeTimer = setTimeout(() => { report(); send('style', { path: pathFor(selected), style: selected.getAttribute('style') || '' }); }, 180);
+  }).observe(document.body);
+  const observer = new MutationObserver(() => { if (selected) report(); });
+  observer.observe(document.documentElement, { attributes: true, subtree: true, attributeFilter: ['style'] });
+  addEventListener('message', (event) => {
+    if (event.data?.source !== 'ghighais-parent' || !selected) return;
+    if (event.data.type === 'dimensions') {
+      if (event.data.width) selected.style.width = Math.max(1, Number(event.data.width)) + 'px';
+      if (event.data.height) selected.style.height = Math.max(1, Number(event.data.height)) + 'px';
+      report(); send('style', { path: pathFor(selected), style: selected.getAttribute('style') || '' });
+    }
+  });
+})();
+</script>`;
+
+function buildPreview(files: FileMap, editMode: boolean): string {
+  const entryName = htmlEntry(files);
+  if (!entryName) return "";
+  const source = files[entryName];
+  if (!source) return "";
+  let html = source.replace(/<link[^>]+href=["']([^"']+\.css)["'][^>]*>/gi, (full, href: string) => {
+    const key = Object.keys(files).find((name) => name.endsWith(href.replace(/^\.?\//, "")));
+    return key && files[key] ? `<style>\n${files[key]}\n</style>` : full;
+  });
+  html = html.replace(/<script[^>]+src=["']([^"']+\.js)["'][^>]*>\s*<\/script>/gi, (full, src: string) => {
+    const key = Object.keys(files).find((name) => name.endsWith(src.replace(/^\.?\//, "")));
+    return key && files[key] ? `<script>\n${files[key]}\n<\/script>` : full;
+  });
+  if (editMode) {
+    const editorCss = `<style data-ghighais-editor>[data-gh-selected="true"]{outline:2px solid #00d98b!important;outline-offset:2px!important;resize:both!important;overflow:auto!important;cursor:move!important}</style>`;
+    html = html.includes("</body>")
+      ? html.replace("</body>", `${editorCss}${EDITOR_SCRIPT}</body>`)
+      : `${html}${editorCss}${EDITOR_SCRIPT}`;
+  }
   return html;
 }
 
+function applyInlineStyle(files: FileMap, path: number[], style: string): FileMap {
+  const entry = htmlEntry(files);
+  const source = entry ? files[entry] : undefined;
+  if (!entry || !source) return files;
+  const doc = new DOMParser().parseFromString(source, "text/html");
+  let element: Element = doc.body;
+  for (const index of path) {
+    const child = element.children.item(index);
+    if (!child) return files;
+    element = child;
+  }
+  if (style) element.setAttribute("style", style);
+  else element.removeAttribute("style");
+  const doctype = source.trimStart().toLowerCase().startsWith("<!doctype") ? "<!DOCTYPE html>\n" : "";
+  return { ...files, [entry]: `${doctype}${doc.documentElement.outerHTML}\n` };
+}
+
 function Index() {
-  const [tab, setTab] = useState<"ai" | "build" | "patch">("ai");
+  const askAi = useServerFn(generateProject);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const restored = useRef(false);
+  const [tab, setTab] = useState<ToolTab>("build");
   const [fullCode, setFullCode] = useState("");
   const [patchCode, setPatchCode] = useState("");
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [history, setHistory] = useState<ChatLine[]>([]);
   const [token, setToken] = useState("");
   const [repo, setRepo] = useState("");
   const [commitMsg, setCommitMsg] = useState("");
   const [pushing, setPushing] = useState(false);
-  const askAi = useServerFn(generateProject);
   const [projectName, setProjectName] = useState("ghighais-project");
   const [files, setFiles] = useState<FileMap>({});
+  const [editMode, setEditMode] = useState(false);
+  const [previewWidth, setPreviewWidth] = useState<PreviewWidth>("100%");
+  const [selected, setSelected] = useState<SelectedElement | null>(null);
   const [logs, setLogs] = useState<{ text: string; kind: "info" | "success" | "error" }[]>([
     { text: "> GHIGHAIS BRAIN Ready.", kind: "success" },
   ]);
-  const zipInput = useRef<HTMLInputElement>(null);
 
-  const log = (text: string, kind: "info" | "success" | "error" = "info") =>
-    setLogs((l) => [...l, { text: `> ${text}`, kind }]);
-
+  const log = useCallback((text: string, kind: "info" | "success" | "error" = "info") => {
+    setLogs((current) => [...current, { text: `> ${text}`, kind }]);
+  }, []);
   const fileNames = Object.keys(files);
-  const preview = useMemo(() => buildPreview(files), [files]);
+  const preview = useMemo(() => buildPreview(files, editMode), [files, editMode]);
+  const field = "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary";
 
   useEffect(() => {
-    const t = localStorage.getItem("gh_token");
-    const r = localStorage.getItem("gh_repo");
-    if (t) setToken(t);
-    if (r) setRepo(r);
-  }, []);
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        const data = JSON.parse(saved) as { files?: FileMap; history?: ChatLine[]; projectName?: string; repo?: string; previewWidth?: PreviewWidth };
+        if (data.files) setFiles(data.files);
+        if (data.history) setHistory(data.history);
+        if (data.projectName) setProjectName(data.projectName);
+        if (data.repo) setRepo(data.repo);
+        if (data.previewWidth) setPreviewWidth(data.previewWidth);
+      }
+      const savedToken = localStorage.getItem("gh_token");
+      if (savedToken) setToken(savedToken);
+    } catch {
+      log("Workspace lama tidak dapat dipulihkan.", "error");
+    } finally {
+      restored.current = true;
+    }
+  }, [log]);
+
+  useEffect(() => {
+    if (!restored.current) return;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ files, history, projectName, repo, previewWidth }));
+    } catch {
+      log("Penyimpanan browser penuh. Unduh ZIP untuk mencadangkan proyek.", "error");
+    }
+  }, [files, history, projectName, repo, previewWidth, log]);
+
+  useEffect(() => {
+    const receive = (event: MessageEvent) => {
+      if (event.source !== iframeRef.current?.contentWindow || event.data?.source !== "ghighais-visual-editor") return;
+      if (event.data.type === "selected") {
+        setSelected({
+          path: Array.isArray(event.data.path) ? event.data.path : [],
+          tag: String(event.data.tag ?? "element"),
+          label: String(event.data.label ?? ""),
+          width: Number(event.data.width) || 1,
+          height: Number(event.data.height) || 1,
+        });
+      }
+      if (event.data.type === "style" && Array.isArray(event.data.path)) {
+        setFiles((current) => applyInlineStyle(current, event.data.path, String(event.data.style ?? "")));
+        log("Perubahan visual disimpan ke kode.", "success");
+      }
+    };
+    window.addEventListener("message", receive);
+    return () => window.removeEventListener("message", receive);
+  }, [log]);
 
   const runAi = async () => {
-    if (!aiPrompt.trim()) return log("Describe what you want to build or fix first.", "error");
+    const prompt = aiPrompt.trim();
+    if (!prompt) return log("Tulis instruksi AI terlebih dahulu.", "error");
     const hasFiles = fileNames.length > 0;
+    const userLine: ChatLine = { id: crypto.randomUUID(), role: "user", content: prompt };
+    setHistory((current) => [...current, userLine]);
+    setAiPrompt("");
     setAiBusy(true);
-    log(hasFiles ? "Asking AI to fix the current project…" : "Asking AI to build a new project…");
+    log(hasFiles ? "AI melanjutkan proyek aktif…" : "AI membuat proyek baru…");
     try {
       const context = hasFiles
-        ? Object.entries(files)
-            .map(([n, c]) => `${n}:\n${c}`)
-            .join("\n\n")
-            .slice(0, 55000)
+        ? Object.entries(files).map(([name, content]) => `${name}:\n${content}`).join("\n\n").slice(0, 55000)
         : undefined;
-      const res = await askAi({
-        data: { prompt: aiPrompt, mode: hasFiles ? "fix" : "create", context },
-      });
-      let parsed = parseMultiFile(res.text);
-      if (Object.keys(parsed).length === 0) parsed = { "index.html": res.text };
-      setFiles((prev) => {
-        const merged = { ...prev, ...parsed };
-        const gi = ensureGitignore(merged);
-        if (gi.added) log("Auto-added comprehensive .gitignore", "info");
-        return gi.files;
-      });
-      log(`AI delivered ${Object.keys(parsed).length} file(s): ${Object.keys(parsed).join(", ")}`, "success");
-    } catch (e) {
-      log(e instanceof Error ? e.message : "AI request failed.", "error");
+      const aiHistory = history.slice(-12).map((line) => ({ role: line.role, content: line.content }));
+      const response = await askAi({ data: { prompt, mode: hasFiles ? "fix" : "create", context, history: aiHistory } });
+      let parsed = parseMultiFile(response.text);
+      if (Object.keys(parsed).length === 0) parsed = { "index.html": response.text };
+      const delivered = Object.keys(parsed);
+      setFiles((current) => ensureGitignore({ ...current, ...parsed }).files);
+      setHistory((current) => [
+        ...current,
+        { id: crypto.randomUUID(), role: "assistant", content: `Selesai — ${delivered.length} file diperbarui. Proyek aktif tetap dipertahankan.`, files: delivered },
+      ]);
+      log(`AI memperbarui: ${delivered.join(", ")}`, "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Permintaan AI gagal.";
+      setHistory((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: `Gagal: ${message}` }]);
+      log(message, "error");
     } finally {
       setAiBusy(false);
     }
   };
 
-  const push = async () => {
-    if (fileNames.length === 0) return log("Nothing to push yet.", "error");
-    if (!token.trim()) return log("Paste your GitHub token first.", "error");
-    const target = (repo.trim() || projectName).trim();
-    if (!target) return log("Enter a repository name.", "error");
-    setPushing(true);
-    localStorage.setItem("gh_token", token.trim());
-    localStorage.setItem("gh_repo", target);
-    try {
-      const gi = ensureGitignore(files);
-      if (gi.added) {
-        setFiles(gi.files);
-        log("Auto-added comprehensive .gitignore before push", "info");
-      }
-      const out = await pushToGithub({
-        token: token.trim(),
-        repo: target,
-        files: gi.files,
-        message: commitMsg,
-        onLog: (m) => log(m),
-      });
-      log(`Pushed to ${out.url} (${out.branch})`, "success");
-    } catch (e) {
-      log(e instanceof Error ? e.message : "Push failed.", "error");
-    } finally {
-      setPushing(false);
-    }
-  };
-
-
   const generate = () => {
-    if (!fullCode.trim()) return log("Nothing to generate — paste project code first.", "error");
+    if (!fullCode.trim()) return log("Tempel kode proyek terlebih dahulu.", "error");
     let parsed = parseMultiFile(fullCode);
     if (Object.keys(parsed).length === 0) parsed = { "index.html": fullCode };
-    const gi = ensureGitignore(parsed);
-    setFiles(gi.files);
-    log(`Generated ${Object.keys(gi.files).length} file(s): ${Object.keys(gi.files).join(", ")}`, "success");
-    if (gi.added) log("Auto-added comprehensive .gitignore", "info");
+    const next = ensureGitignore(parsed);
+    setFiles(next.files);
+    log(`Proyek dibuat dengan ${Object.keys(next.files).length} file.`, "success");
   };
 
   const loadZip = async (file: File) => {
     try {
       const zip = await JSZip.loadAsync(file);
       const next: FileMap = {};
-      const entries = Object.values(zip.files).filter((f) => !f.dir);
-      for (const entry of entries) next[entry.name] = await entry.async("string");
-      setFiles(next);
+      for (const entry of Object.values(zip.files).filter((item) => !item.dir)) next[entry.name] = await entry.async("string");
+      setFiles(ensureGitignore(next).files);
       setProjectName(file.name.replace(/\.zip$/i, "") || projectName);
-      log(`Loaded ${Object.keys(next).length} file(s) from ${file.name}`, "success");
+      log(`${file.name} dimuat dan siap dilanjutkan.`, "success");
     } catch {
-      log("Could not read that ZIP file.", "error");
+      log("ZIP tidak dapat dibaca.", "error");
     }
   };
 
   const applyPatch = () => {
     const patches = parseMultiFile(patchCode);
-    const names = Object.keys(patches);
-    if (names.length === 0)
-      return log("No file paths found. Use `path/to/file.ext:` before each block.", "error");
-    const next = { ...files };
-    const updated: string[] = [];
-    const added: string[] = [];
-    for (const name of names) {
-      const match =
-        Object.keys(next).find((n) => n === name) ??
-        Object.keys(next).find((n) => n.endsWith("/" + name) || n.split("/").pop() === name.split("/").pop());
-      if (match) {
-        next[match] = patches[name]!;
-        updated.push(match);
-      } else {
-        next[name] = patches[name]!;
-        added.push(name);
+    if (!Object.keys(patches).length) return log("Tidak ada path file yang ditemukan.", "error");
+    setFiles((current) => {
+      const next = { ...current };
+      for (const [name, content] of Object.entries(patches)) {
+        const match = Object.keys(next).find((key) => key === name || key.endsWith(`/${name}`) || key.split("/").pop() === name.split("/").pop());
+        next[match ?? name] = content;
       }
-    }
-    setFiles(next);
-    if (updated.length) log(`Updated: ${updated.join(", ")}`, "success");
-    if (added.length) log(`Added: ${added.join(", ")}`, "info");
+      return ensureGitignore(next).files;
+    });
+    log(`Patch diterapkan ke ${Object.keys(patches).length} file.`, "success");
   };
 
   const download = async () => {
-    if (fileNames.length === 0) return log("Nothing to export yet.", "error");
-    const gi = ensureGitignore(files);
-    if (gi.added) {
-      setFiles(gi.files);
-      log("Auto-added comprehensive .gitignore to export", "info");
-    }
+    if (!fileNames.length) return log("Belum ada proyek untuk diunduh.", "error");
+    const ready = ensureGitignore(files).files;
+    setFiles(ready);
     const zip = new JSZip();
-    for (const [name, content] of Object.entries(gi.files)) zip.file(name, content);
+    for (const [name, content] of Object.entries(ready)) zip.file(name, content);
     const blob = await zip.generateAsync({ type: "blob" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${projectName || "project"}.zip`;
-    a.click();
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${projectName || "project"}.zip`;
+    anchor.click();
     URL.revokeObjectURL(url);
-    log(`Exported ${projectName || "project"}.zip (${fileNames.length} files)`, "success");
+    log("ZIP proyek berhasil dibuat.", "success");
   };
 
-  const tabClass = (active: boolean) =>
-    `flex-1 px-4 py-4 text-sm font-bold uppercase tracking-widest transition-colors ${
-      active ? "bg-primary text-primary-foreground" : "bg-background text-muted-foreground hover:text-foreground"
-    }`;
+  const push = async () => {
+    if (!fileNames.length) return log("Belum ada proyek untuk di-push.", "error");
+    if (!token.trim()) return log("Masukkan token GitHub terlebih dahulu.", "error");
+    const target = (repo.trim() || projectName).trim();
+    if (!target) return log("Masukkan nama repository.", "error");
+    setPushing(true);
+    localStorage.setItem("gh_token", token.trim());
+    try {
+      const ready = ensureGitignore(files).files;
+      setFiles(ready);
+      const output = await pushToGithub({ token: token.trim(), repo: target, files: ready, message: commitMsg, onLog: log });
+      log(`Berhasil push ke ${output.url} (${output.branch}).`, "success");
+    } catch (error) {
+      log(error instanceof Error ? error.message : "Push gagal.", "error");
+    } finally {
+      setPushing(false);
+    }
+  };
 
-  const field =
-    "w-full bg-background border border-border rounded-md px-3 py-2 text-sm text-foreground outline-none focus:border-primary";
+  const updateDimensions = (width: number, height: number) => {
+    iframeRef.current?.contentWindow?.postMessage({ source: "ghighais-parent", type: "dimensions", width, height }, "*");
+    setSelected((current) => (current ? { ...current, width, height } : current));
+  };
 
   return (
-    <main className="min-h-screen bg-background p-4 md:p-6">
+    <main className="min-h-screen bg-background p-3 md:p-6">
       <header className="relative border-b-2 border-primary pb-4 text-center">
-        <h1 className="text-glow text-2xl font-bold tracking-[0.2em] text-primary md:text-3xl">
-          GHIGHAIS BRAIN
-        </h1>
-        <p className="mt-1 text-xs uppercase tracking-[0.3em] text-muted-foreground">Smart Merge Edition</p>
-        <span className="absolute right-0 top-0 rounded bg-primary px-2 py-0.5 text-[10px] font-bold text-primary-foreground">
-          v2
-        </span>
+        <h1 className="text-glow text-2xl font-bold tracking-[0.2em] text-primary md:text-3xl">GHIGHAIS BRAIN</h1>
+        <p className="mt-1 text-xs uppercase tracking-[0.3em] text-muted-foreground">Persistent AI Studio</p>
+        <span className="absolute right-0 top-0 rounded bg-primary px-2 py-0.5 text-[10px] font-bold text-primary-foreground">v3</span>
       </header>
 
-      <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <section className="flex flex-col overflow-hidden rounded-lg border border-border bg-card">
-          <div className="flex border-b border-border">
-            <button className={tabClass(tab === "ai")} onClick={() => setTab("ai")}>
-              ✨ AI Prompt
-            </button>
-            <button className={tabClass(tab === "build")} onClick={() => setTab("build")}>
-              🏗️ Build New
-            </button>
-            <button className={tabClass(tab === "patch")} onClick={() => setTab("patch")}>
-              🔧 Smart Patch
-            </button>
+      <section className="mt-4 border-b border-border pb-4">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-primary"><Bot /> AI Project Brain</div>
+          <span className="text-[10px] text-muted-foreground">{fileNames.length ? "Melanjutkan proyek aktif" : "Proyek baru"}</span>
+        </div>
+        {history.length > 0 && (
+          <div className="scrollbar-thin-dark mb-3 max-h-40 space-y-2 overflow-y-auto border-l-2 border-border pl-3">
+            {history.map((line) => (
+              <div key={line.id} className="text-xs leading-relaxed">
+                <span className={line.role === "user" ? "font-bold text-accent" : "font-bold text-primary"}>{line.role === "user" ? "YOU" : "AI"}</span>
+                <span className="ml-2 text-foreground">{line.content}</span>
+                {line.files?.length ? <span className="ml-2 text-muted-foreground">[{line.files.join(", ")}]</span> : null}
+              </div>
+            ))}
           </div>
+        )}
+        <div className="flex items-end gap-2">
+          <textarea
+            value={aiPrompt}
+            onChange={(event) => setAiPrompt(event.target.value)}
+            onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") void runAi(); }}
+            placeholder={fileNames.length ? "Instruksi berikutnya untuk proyek ini…" : "Jelaskan aplikasi yang ingin dibuat…"}
+            className={`${field} min-h-20 flex-1 resize-y`}
+          />
+          <Button aria-label="Kirim instruksi AI" title="Kirim instruksi AI" size="icon" className="h-20 w-14 shrink-0" disabled={aiBusy} onClick={() => void runAi()}>
+            {aiBusy ? <LoaderCircle className="animate-spin" /> : <Send />}
+          </Button>
+        </div>
+      </section>
 
-          <div className="flex-1 space-y-3 overflow-y-auto p-4">
-            {tab === "ai" ? (
+      <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(300px,0.75fr)_minmax(0,1.6fr)]">
+        <section className="flex flex-col overflow-hidden rounded-lg border border-border bg-card">
+          <div className="grid grid-cols-2 border-b border-border">
+            <Button variant={tab === "build" ? "default" : "ghost"} className="h-12 rounded-none uppercase tracking-widest" onClick={() => setTab("build")}><Hammer /> Build</Button>
+            <Button variant={tab === "patch" ? "default" : "ghost"} className="h-12 rounded-none uppercase tracking-widest" onClick={() => setTab("patch")}><Code2 /> Patch</Button>
+          </div>
+          <div className="flex-1 space-y-3 p-4">
+            {tab === "build" ? (
               <>
-                <label className="block text-xs uppercase tracking-widest text-muted-foreground">
-                  Describe your app (or the fix you need)
-                </label>
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  {fileNames.length > 0
-                    ? "Files are loaded, so the AI will fix / upgrade the current project."
-                    : "No files yet — the AI will build a brand new project instantly."}
-                </p>
-                <textarea
-                  value={aiPrompt}
-                  onChange={(e) => setAiPrompt(e.target.value)}
-                  placeholder="e.g. Buat landing page toko kopi dengan menu, galeri, dan form pesanan"
-                  className={`${field} h-40 resize-y`}
-                />
-                <button
-                  onClick={runAi}
-                  disabled={aiBusy}
-                  className="w-full rounded-md border border-primary px-4 py-3 text-sm font-bold uppercase tracking-widest text-primary transition-all hover:bg-primary hover:text-primary-foreground hover:shadow-[0_0_15px_var(--primary)] disabled:opacity-50"
-                >
-                  {aiBusy ? "⏳ Working…" : fileNames.length > 0 ? "🛠️ Fix With AI" : "✨ Create With AI"}
-                </button>
-                {fileNames.length > 0 && (
-                  <button
-                    onClick={() => {
-                      setFiles({});
-                      log("Workspace cleared.", "info");
-                    }}
-                    className="w-full rounded-md border border-border px-4 py-2 text-xs uppercase tracking-widest text-muted-foreground hover:text-foreground"
-                  >
-                    Clear workspace
-                  </button>
-                )}
-              </>
-            ) : tab === "build" ? (
-              <>
-                <label className="block text-xs uppercase tracking-widest text-muted-foreground">
-                  Paste full project code
-                </label>
-                <textarea
-                  value={fullCode}
-                  onChange={(e) => setFullCode(e.target.value)}
-                  spellCheck={false}
-                  placeholder={"index.html:\n<!DOCTYPE html> ...\n\nstyle.css:\nbody { }"}
-                  className={`${field} h-56 resize-y font-mono`}
-                />
-                <button
-                  onClick={generate}
-                  className="w-full rounded-md border border-primary px-4 py-3 text-sm font-bold uppercase tracking-widest text-primary transition-all hover:bg-primary hover:text-primary-foreground hover:shadow-[0_0_15px_var(--primary)]"
-                >
-                  ⚡ Generate Project
-                </button>
+                <label className="block text-xs uppercase tracking-widest text-muted-foreground">Tempel kode proyek lengkap</label>
+                <textarea value={fullCode} onChange={(event) => setFullCode(event.target.value)} spellCheck={false} placeholder={"index.html:\n<!DOCTYPE html> ...\n\nstyle.css:\nbody { }"} className={`${field} h-48 resize-y font-mono`} />
+                <Button variant="outline" className="w-full border-primary text-primary" onClick={generate}><Hammer /> Generate Project</Button>
               </>
             ) : (
               <>
-                <label className="block text-xs uppercase tracking-widest text-muted-foreground">
-                  1. Upload project ZIP
+                <label className="block text-xs uppercase tracking-widest text-muted-foreground">Upload proyek ZIP</label>
+                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-border p-3 text-xs text-muted-foreground hover:text-foreground">
+                  <Upload /> Pilih ZIP
+                  <input type="file" accept=".zip" className="sr-only" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadZip(file); }} />
                 </label>
-                <input
-                  ref={zipInput}
-                  type="file"
-                  accept=".zip"
-                  onChange={(e) => e.target.files?.[0] && loadZip(e.target.files[0])}
-                  className={`${field} file:mr-3 file:rounded file:border-0 file:bg-primary file:px-3 file:py-1 file:text-primary-foreground`}
-                />
-                <label className="block pt-2 text-xs uppercase tracking-widest text-muted-foreground">
-                  2. Paste fixed code (multiple files supported)
-                </label>
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
-                  Format: <span className="text-primary">path/to/file.ext:</span> then the code. Matching
-                  files in the ZIP are replaced automatically.
-                </p>
-                <textarea
-                  value={patchCode}
-                  onChange={(e) => setPatchCode(e.target.value)}
-                  spellCheck={false}
-                  placeholder={"src/app.js:\nconsole.log('fixed')"}
-                  className={`${field} h-48 resize-y font-mono`}
-                />
-                <button
-                  onClick={applyPatch}
-                  className="w-full rounded-md border border-primary px-4 py-3 text-sm font-bold uppercase tracking-widest text-primary transition-all hover:bg-primary hover:text-primary-foreground hover:shadow-[0_0_15px_var(--primary)]"
-                >
-                  🧠 Apply Smart Patch
-                </button>
+                <label className="block pt-2 text-xs uppercase tracking-widest text-muted-foreground">Kode perbaikan</label>
+                <textarea value={patchCode} onChange={(event) => setPatchCode(event.target.value)} spellCheck={false} placeholder={"src/app.js:\nconsole.log('fixed')"} className={`${field} h-40 resize-y font-mono`} />
+                <Button variant="outline" className="w-full border-primary text-primary" onClick={applyPatch}><Code2 /> Apply Patch</Button>
               </>
             )}
           </div>
-
           <div className="space-y-2 border-t border-border p-4">
-            <label className="block text-xs uppercase tracking-widest text-muted-foreground">Export</label>
-            <input
-              value={projectName}
-              onChange={(e) => setProjectName(e.target.value)}
-              placeholder="project name"
-              className={field}
-            />
-            <button
-              onClick={download}
-              className="w-full rounded-md border border-accent px-4 py-3 text-sm font-bold uppercase tracking-widest text-accent transition-colors hover:bg-accent hover:text-accent-foreground"
-            >
-              📥 Download .zip
-            </button>
+            <input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Nama proyek" className={field} />
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" onClick={() => void download()}><Download /> ZIP</Button>
+              <Button variant="outline" onClick={() => { setFiles({}); setHistory([]); setSelected(null); log("Workspace dibersihkan."); }}><Trash2 /> Reset</Button>
+            </div>
           </div>
-
           <div className="space-y-2 border-t border-border p-4">
-            <label className="block text-xs uppercase tracking-widest text-muted-foreground">
-              Push to GitHub
-            </label>
-            <p className="text-[11px] leading-relaxed text-muted-foreground">
-              Paste a personal access token with <span className="text-primary">repo</span> access. It stays
-              in this browser only and is used to push straight to your own account.
-            </p>
-            <input
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              type="password"
-              autoComplete="off"
-              placeholder="ghp_… personal access token"
-              className={field}
-            />
-            <input
-              value={repo}
-              onChange={(e) => setRepo(e.target.value)}
-              placeholder="repository name (created if missing)"
-              className={field}
-            />
-            <input
-              value={commitMsg}
-              onChange={(e) => setCommitMsg(e.target.value)}
-              placeholder="commit message (optional)"
-              className={field}
-            />
-            <button
-              onClick={push}
-              disabled={pushing}
-              className="w-full rounded-md border border-primary px-4 py-3 text-sm font-bold uppercase tracking-widest text-primary transition-all hover:bg-primary hover:text-primary-foreground disabled:opacity-50"
-            >
-              {pushing ? "⏳ Pushing…" : "🚀 Push to GitHub"}
-            </button>
-            <a
-              href="https://github.com/settings/tokens/new?scopes=repo&description=GHIGHAIS%20BRAIN"
-              target="_blank"
-              rel="noreferrer"
-              className="block text-center text-[11px] text-accent underline"
-            >
-              Create a token →
-            </a>
+            <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground"><Github /> Push to GitHub</div>
+            <input value={token} onChange={(event) => setToken(event.target.value)} type="password" autoComplete="off" placeholder="GitHub personal access token" className={field} />
+            <input value={repo} onChange={(event) => setRepo(event.target.value)} placeholder="Nama repository" className={field} />
+            <input value={commitMsg} onChange={(event) => setCommitMsg(event.target.value)} placeholder="Pesan commit (opsional)" className={field} />
+            <Button className="w-full" disabled={pushing} onClick={() => void push()}>{pushing ? <LoaderCircle className="animate-spin" /> : <Github />} {pushing ? "Pushing…" : "Push"}</Button>
+            <a href="https://github.com/settings/tokens/new?scopes=repo&description=GHIGHAIS%20BRAIN" target="_blank" rel="noreferrer" className="block text-center text-[11px] text-accent underline">Buat token GitHub</a>
           </div>
         </section>
 
-        <section className="flex min-h-[420px] flex-col overflow-hidden rounded-lg border border-border bg-card">
-          <div className="flex items-center justify-between border-b border-border px-4 py-3 text-xs uppercase tracking-widest">
-            <span className="text-primary">Live Preview</span>
-            <span className="text-muted-foreground">{fileNames.length} files</span>
+        <section className="flex min-h-[560px] flex-col overflow-hidden rounded-lg border border-border bg-card">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-primary"><Eye /> Live Preview <span className="text-muted-foreground">{fileNames.length} files</span></div>
+            <div className="flex items-center gap-1">
+              {(["100%", "768px", "390px"] as PreviewWidth[]).map((width) => (
+                <Button key={width} variant={previewWidth === width ? "secondary" : "ghost"} size="sm" title={`Lebar preview ${width}`} onClick={() => setPreviewWidth(width)}>{width === "100%" ? "Full" : width.replace("px", "")}</Button>
+              ))}
+              <Button variant={editMode ? "default" : "outline"} size="sm" onClick={() => { setEditMode((value) => !value); setSelected(null); }}>
+                {editMode ? <MousePointer2 /> : <BoxSelect />} {editMode ? "Editing" : "Edit"}
+              </Button>
+            </div>
           </div>
-          {preview ? (
-            <iframe
-              title="Live preview"
-              srcDoc={preview}
-              sandbox="allow-scripts allow-modals allow-forms"
-              className="flex-1 bg-white"
-            />
-          ) : (
-            <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">
-              No HTML entry file yet. Generate a project or upload a ZIP to see it here.
+          {editMode && (
+            <div className="flex min-h-14 flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-3 py-2 text-xs">
+              {selected ? (
+                <>
+                  <span className="max-w-48 truncate text-primary">&lt;{selected.tag}&gt; {selected.label}</span>
+                  <label className="flex items-center gap-1 text-muted-foreground">W <input aria-label="Lebar elemen" type="number" min="1" value={selected.width} onChange={(event) => updateDimensions(Number(event.target.value), selected.height)} className="w-20 rounded border border-border bg-background px-2 py-1 text-foreground" /></label>
+                  <label className="flex items-center gap-1 text-muted-foreground">H <input aria-label="Tinggi elemen" type="number" min="1" value={selected.height} onChange={(event) => updateDimensions(selected.width, Number(event.target.value))} className="w-20 rounded border border-border bg-background px-2 py-1 text-foreground" /></label>
+                  <span className="text-muted-foreground"><Maximize2 className="mr-1 inline" />Seret elemen atau sudut kanan bawah</span>
+                </>
+              ) : <span className="text-muted-foreground">Klik elemen di preview untuk memilih dan mengubahnya.</span>}
             </div>
           )}
-          {fileNames.length > 0 && (
-            <ul className="scrollbar-thin-dark max-h-28 overflow-y-auto border-t border-border p-3 text-xs text-muted-foreground">
-              {fileNames.map((n) => (
-                <li key={n} className="truncate">
-                  · {n}
-                </li>
-              ))}
-            </ul>
-          )}
+          <div className="flex flex-1 justify-center overflow-auto bg-muted/30 p-2">
+            {preview ? (
+              <iframe ref={iframeRef} title="Live preview" srcDoc={preview} sandbox="allow-scripts allow-modals allow-forms" style={{ width: previewWidth }} className="h-full min-h-[480px] max-w-full border-0 bg-card shadow-sm transition-[width]" />
+            ) : (
+              <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">Tulis prompt AI, tempel kode, atau upload ZIP untuk memulai.</div>
+            )}
+          </div>
+          {fileNames.length > 0 && <div className="scrollbar-thin-dark flex max-h-20 flex-wrap gap-x-3 gap-y-1 overflow-y-auto border-t border-border p-3 text-[11px] text-muted-foreground">{fileNames.map((name) => <span key={name}>· {name}</span>)}</div>}
         </section>
       </div>
 
       <div className="scrollbar-thin-dark mt-5 h-28 overflow-y-auto rounded-lg border border-border bg-background p-3 text-xs">
-        {logs.map((l, i) => (
-          <p
-            key={i}
-            className={
-              l.kind === "success"
-                ? "text-primary"
-                : l.kind === "error"
-                  ? "text-destructive"
-                  : "text-accent"
-            }
-          >
-            {l.text}
-          </p>
-        ))}
+        {logs.map((item, index) => <p key={`${item.text}-${index}`} className={item.kind === "success" ? "text-primary" : item.kind === "error" ? "text-destructive" : "text-accent"}>{item.text}</p>)}
       </div>
     </main>
   );
