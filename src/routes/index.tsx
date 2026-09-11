@@ -329,7 +329,7 @@ function Index() {
 
       if (!received.trim()) throw new Error(lastError);
       let parsed = parseMultiFile(received);
-      if (Object.keys(parsed).length === 0) parsed = { "index.html": buffer };
+      if (Object.keys(parsed).length === 0) parsed = { "index.html": received };
       const delivered = Object.keys(parsed);
       setFiles((current) => ensureGitignore({ ...current, ...parsed }).files);
       setProgress(100);
