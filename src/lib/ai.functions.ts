@@ -39,8 +39,8 @@ export const generateProject = createServerFn({ method: "POST" })
     try {
       const result = streamText({
         model: lovable.responses("openai/gpt-6-astra"),
+        system: SYSTEM,
         messages: [
-          { role: "system", content: SYSTEM },
           ...data.history,
           { role: "user", content: userContent },
         ],
