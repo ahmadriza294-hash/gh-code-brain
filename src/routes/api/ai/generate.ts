@@ -45,7 +45,6 @@ export const Route = createFileRoute("/api/ai/generate")({
         try {
           const result = streamText({
             model: lovable.responses("openai/gpt-6-astra"),
-            abortSignal: request.signal,
             system: AI_SYSTEM_PROMPT,
             messages: [
               ...data.history,

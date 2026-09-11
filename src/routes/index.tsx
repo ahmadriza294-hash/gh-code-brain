@@ -273,33 +273,62 @@ function Index() {
     setProgress(2);
     setStreamFiles({});
     log(hasFiles ? "AI melanjutkan proyek aktif…" : "AI membuat proyek baru…");
+    let received = "";
+    let progressTimer: ReturnType<typeof setInterval> | undefined;
     try {
       const context = hasFiles
         ? Object.entries(files).map(([name, content]) => `${name}:\n${content}`).join("\n\n").slice(0, 55000)
         : undefined;
       const aiHistory = history.slice(-12).map((line) => ({ role: line.role, content: line.content }));
-      const response = await fetch("/api/ai/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, mode: hasFiles ? "fix" : "create", context, history: aiHistory }),
-      });
-      if (!response.ok || !response.body) {
-        throw new Error((await response.text()) || "Permintaan AI gagal.");
+      const requestBody = JSON.stringify({ prompt, mode: hasFiles ? "fix" : "create", context, history: aiHistory });
+      progressTimer = setInterval(() => {
+        setProgress((current) => (current < 28 ? current + 1 : current));
+      }, 1800);
+
+      let lastError = "Permintaan AI gagal.";
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const response = await fetch("/api/ai/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: requestBody,
+        });
+        if (!response.ok || !response.body) {
+          lastError = (await response.text()) || lastError;
+          if ((response.status === 429 || response.status >= 500) && attempt < 2) {
+            const retryAfter = Number(response.headers.get("Retry-After"));
+            const waitMs = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 1500 * 2 ** attempt;
+            log(`AI mencoba kembali (${attempt + 2}/3)…`);
+            await new Promise((resolve) => setTimeout(resolve, waitMs));
+            continue;
+          }
+          throw new Error(lastError);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            received += decoder.decode(value, { stream: true });
+            setProgress(Math.min(96, Math.max(30, Math.round((received.length / (received.length + 3500)) * 100))));
+            const partial = parseMultiFile(received);
+            if (Object.keys(partial).length > 0) setStreamFiles(partial);
+          }
+          received += decoder.decode();
+          break;
+        } catch (streamError) {
+          lastError = streamError instanceof Error ? streamError.message : lastError;
+          if (Object.keys(parseMultiFile(received)).length > 0) break;
+          if (attempt >= 2) throw streamError;
+          received = "";
+          log(`Aliran terputus, AI mencoba kembali (${attempt + 2}/3)…`);
+          await new Promise((resolve) => setTimeout(resolve, 1500 * 2 ** attempt));
+        }
       }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        setProgress(Math.min(96, Math.round((buffer.length / (buffer.length + 3500)) * 100)));
-        const partial = parseMultiFile(buffer);
-        if (Object.keys(partial).length > 0) setStreamFiles(partial);
-      }
-      buffer += decoder.decode();
-      if (!buffer.trim()) throw new Error("AI mengembalikan hasil kosong.");
-      let parsed = parseMultiFile(buffer);
+
+      if (!received.trim()) throw new Error(lastError);
+      let parsed = parseMultiFile(received);
       if (Object.keys(parsed).length === 0) parsed = { "index.html": buffer };
       const delivered = Object.keys(parsed);
       setFiles((current) => ensureGitignore({ ...current, ...parsed }).files);
@@ -310,11 +339,24 @@ function Index() {
       ]);
       log(`AI memperbarui: ${delivered.join(", ")}`, "success");
     } catch (error) {
+      const partial = parseMultiFile(received);
+      if (Object.keys(partial).length > 0) {
+        const delivered = Object.keys(partial);
+        setFiles((current) => ensureGitignore({ ...current, ...partial }).files);
+        setProgress(100);
+        setHistory((current) => [
+          ...current,
+          { id: crypto.randomUUID(), role: "assistant", content: `Hasil yang sudah selesai dipulihkan — ${delivered.length} file diperbarui.`, files: delivered },
+        ]);
+        log(`Hasil generate dipulihkan: ${delivered.join(", ")}`, "success");
+        return;
+      }
       const message = error instanceof Error ? error.message : "Permintaan AI gagal.";
       setHistory((current) => [...current, { id: crypto.randomUUID(), role: "assistant", content: `Gagal: ${message}` }]);
       log(message, "error");
       setProgress(0);
     } finally {
+      if (progressTimer) clearInterval(progressTimer);
       setAiBusy(false);
       setStreamFiles({});
     }
