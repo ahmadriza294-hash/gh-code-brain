@@ -245,6 +245,9 @@ function Index() {
       <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
         <section className="flex flex-col overflow-hidden rounded-lg border border-border bg-card">
           <div className="flex border-b border-border">
+            <button className={tabClass(tab === "ai")} onClick={() => setTab("ai")}>
+              ✨ AI Prompt
+            </button>
             <button className={tabClass(tab === "build")} onClick={() => setTab("build")}>
               🏗️ Build New
             </button>
@@ -254,7 +257,42 @@ function Index() {
           </div>
 
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
-            {tab === "build" ? (
+            {tab === "ai" ? (
+              <>
+                <label className="block text-xs uppercase tracking-widest text-muted-foreground">
+                  Describe your app (or the fix you need)
+                </label>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  {fileNames.length > 0
+                    ? "Files are loaded, so the AI will fix / upgrade the current project."
+                    : "No files yet — the AI will build a brand new project instantly."}
+                </p>
+                <textarea
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  placeholder="e.g. Buat landing page toko kopi dengan menu, galeri, dan form pesanan"
+                  className={`${field} h-40 resize-y`}
+                />
+                <button
+                  onClick={runAi}
+                  disabled={aiBusy}
+                  className="w-full rounded-md border border-primary px-4 py-3 text-sm font-bold uppercase tracking-widest text-primary transition-all hover:bg-primary hover:text-primary-foreground hover:shadow-[0_0_15px_var(--primary)] disabled:opacity-50"
+                >
+                  {aiBusy ? "⏳ Working…" : fileNames.length > 0 ? "🛠️ Fix With AI" : "✨ Create With AI"}
+                </button>
+                {fileNames.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setFiles({});
+                      log("Workspace cleared.", "info");
+                    }}
+                    className="w-full rounded-md border border-border px-4 py-2 text-xs uppercase tracking-widest text-muted-foreground hover:text-foreground"
+                  >
+                    Clear workspace
+                  </button>
+                )}
+              </>
+            ) : tab === "build" ? (
               <>
                 <label className="block text-xs uppercase tracking-widest text-muted-foreground">
                   Paste full project code
