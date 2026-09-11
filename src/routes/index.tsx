@@ -43,7 +43,7 @@ function parseMultiFile(text: string): FileMap {
     const m = line.match(FILE_HEADER);
     if (m) {
       flush();
-      current = m[1];
+      current = m[1]!;
       continue;
     }
     if (current) buffer.push(line);
@@ -57,7 +57,7 @@ function buildPreview(files: FileMap): string {
     Object.keys(files).find((n) => n.toLowerCase().endsWith("index.html")) ??
     Object.keys(files).find((n) => n.toLowerCase().endsWith(".html"));
   if (!entryName) return "";
-  let html = files[entryName];
+  let html = files[entryName]!;
 
   html = html.replace(
     /<link[^>]+href=["']([^"']+\.css)["'][^>]*>/gi,
@@ -128,10 +128,10 @@ function Index() {
         Object.keys(next).find((n) => n === name) ??
         Object.keys(next).find((n) => n.endsWith("/" + name) || n.split("/").pop() === name.split("/").pop());
       if (match) {
-        next[match] = patches[name];
+        next[match] = patches[name]!;
         updated.push(match);
       } else {
-        next[name] = patches[name];
+        next[name] = patches[name]!;
         added.push(name);
       }
     }
