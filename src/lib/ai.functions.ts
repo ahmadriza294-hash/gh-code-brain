@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { streamText } from "ai";
 import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
+import { AI_SYSTEM_PROMPT } from "@/lib/ai-system-prompt";
 
 const schema = z.object({
   prompt: z.string().min(1).max(8000),
@@ -13,26 +14,7 @@ const schema = z.object({
     .default([]),
 });
 
-const SYSTEM = `You are a senior web developer that outputs complete, runnable static web projects.
-
-STRICT OUTPUT FORMAT:
-- Output ONLY file blocks, nothing else. No explanations, no markdown fences.
-- Each file starts on its own line with its path followed by a colon, e.g.
-index.html:
-- Then the full file content, then a blank line before the next path.
-- Always include index.html as the entry file. Inline or link style.css / app.js as separate files when useful.
-- Use plain HTML/CSS/JS (no build step) unless the user explicitly asks otherwise.
-- Always return the COMPLETE content of every file you touch, never diffs or partial snippets.
-- ALWAYS include a .gitignore file at the project root. Use this comprehensive rule set (keep the section comments):
-  # Security: .env, .env.*, !.env.example, *.local, *.pem, *.key, *.crt, .firebase/, google-services.json, GoogleService-Info.plist, .aws/credentials, amplify/
-  # Dependencies: node_modules/
-  # Build Output: dist/, build/, .next/, .output/, .turbo/, .vinxi/, .tanstack/, .vercel/ (add the output dir relevant to the detected framework)
-  # Cache: .cache/, .parcel-cache/, *.tsbuildinfo, .eslintcache, .stylelintcache
-  # Logs: logs, *.log, npm-debug.log*, yarn-debug.log*, pnpm-debug.log*
-  # Testing: coverage/, .nyc_output/, test-results/, playwright-report/
-  # OS & Editor: .DS_Store, Thumbs.db, desktop.ini, .vscode/*, !.vscode/extensions.json, .idea/
-  # Database & Sensitive Data: *.sql, *.db, *.sqlite
-  NEVER ignore src/, public/, assets/, components/, README.md or LICENSE.`;
+const SYSTEM = AI_SYSTEM_PROMPT;
 
 export const generateProject = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => schema.parse(data))
@@ -57,8 +39,8 @@ export const generateProject = createServerFn({ method: "POST" })
     try {
       const result = streamText({
         model: lovable.responses("openai/gpt-6-astra"),
+        system: SYSTEM,
         messages: [
-          { role: "system", content: SYSTEM },
           ...data.history,
           { role: "user", content: userContent },
         ],
