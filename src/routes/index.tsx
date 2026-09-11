@@ -80,9 +80,16 @@ function buildPreview(files: FileMap): string {
 }
 
 function Index() {
-  const [tab, setTab] = useState<"build" | "patch">("build");
+  const [tab, setTab] = useState<"ai" | "build" | "patch">("ai");
   const [fullCode, setFullCode] = useState("");
   const [patchCode, setPatchCode] = useState("");
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [token, setToken] = useState("");
+  const [repo, setRepo] = useState("");
+  const [commitMsg, setCommitMsg] = useState("");
+  const [pushing, setPushing] = useState(false);
+  const askAi = useServerFn(generateProject);
   const [projectName, setProjectName] = useState("ghighais-project");
   const [files, setFiles] = useState<FileMap>({});
   const [logs, setLogs] = useState<{ text: string; kind: "info" | "success" | "error" }[]>([
