@@ -139,7 +139,7 @@ const EDITOR_SCRIPT = String.raw`<script data-ghighais-editor>
 })();
 </script>`;
 
-function buildPreview(files: FileMap, editMode: boolean): string {
+function buildPreview(files: FileMap, editMode: boolean, isStreaming = false): string {
   const entryName = htmlEntry(files);
   if (!entryName) return "";
   const source = files[entryName];
@@ -149,9 +149,11 @@ function buildPreview(files: FileMap, editMode: boolean): string {
     return key && files[key] ? `<style>\n${files[key]}\n</style>` : full;
   });
   html = html.replace(/<script[^>]+src=["']([^"']+\.js)["'][^>]*>\s*<\/script>/gi, (full, src: string) => {
+    if (isStreaming) return "";
     const key = Object.keys(files).find((name) => name.endsWith(src.replace(/^\.?\//, "")));
     return key && files[key] ? `<script>\n${files[key]}\n<\/script>` : full;
   });
+  if (isStreaming) html = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
   if (editMode) {
     const editorCss = `<style data-ghighais-editor>[data-gh-selected="true"]{outline:2px solid #00d98b!important;outline-offset:2px!important;resize:both!important;overflow:auto!important;cursor:move!important}</style>`;
     html = html.includes("</body>")
@@ -209,7 +211,7 @@ function Index() {
   const fileNames = Object.keys(files);
   const streaming = Object.keys(streamFiles).length > 0;
   const previewFiles = useMemo(() => (streaming ? { ...files, ...streamFiles } : files), [files, streamFiles, streaming]);
-  const preview = useMemo(() => buildPreview(previewFiles, editMode && !streaming), [previewFiles, editMode, streaming]);
+  const preview = useMemo(() => buildPreview(previewFiles, editMode && !streaming, streaming), [previewFiles, editMode, streaming]);
   const field = "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary";
 
   useEffect(() => {
