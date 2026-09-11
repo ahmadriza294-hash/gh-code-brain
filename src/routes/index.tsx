@@ -103,6 +103,64 @@ function Index() {
   const fileNames = Object.keys(files);
   const preview = useMemo(() => buildPreview(files), [files]);
 
+  useEffect(() => {
+    const t = localStorage.getItem("gh_token");
+    const r = localStorage.getItem("gh_repo");
+    if (t) setToken(t);
+    if (r) setRepo(r);
+  }, []);
+
+  const runAi = async () => {
+    if (!aiPrompt.trim()) return log("Describe what you want to build or fix first.", "error");
+    const hasFiles = fileNames.length > 0;
+    setAiBusy(true);
+    log(hasFiles ? "Asking AI to fix the current project…" : "Asking AI to build a new project…");
+    try {
+      const context = hasFiles
+        ? Object.entries(files)
+            .map(([n, c]) => `${n}:\n${c}`)
+            .join("\n\n")
+            .slice(0, 55000)
+        : undefined;
+      const res = await askAi({
+        data: { prompt: aiPrompt, mode: hasFiles ? "fix" : "create", context },
+      });
+      let parsed = parseMultiFile(res.text);
+      if (Object.keys(parsed).length === 0) parsed = { "index.html": res.text };
+      setFiles((prev) => ({ ...prev, ...parsed }));
+      log(`AI delivered ${Object.keys(parsed).length} file(s): ${Object.keys(parsed).join(", ")}`, "success");
+    } catch (e) {
+      log(e instanceof Error ? e.message : "AI request failed.", "error");
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const push = async () => {
+    if (fileNames.length === 0) return log("Nothing to push yet.", "error");
+    if (!token.trim()) return log("Paste your GitHub token first.", "error");
+    const target = (repo.trim() || projectName).trim();
+    if (!target) return log("Enter a repository name.", "error");
+    setPushing(true);
+    localStorage.setItem("gh_token", token.trim());
+    localStorage.setItem("gh_repo", target);
+    try {
+      const out = await pushToGithub({
+        token: token.trim(),
+        repo: target,
+        files,
+        message: commitMsg,
+        onLog: (m) => log(m),
+      });
+      log(`Pushed to ${out.url} (${out.branch})`, "success");
+    } catch (e) {
+      log(e instanceof Error ? e.message : "Push failed.", "error");
+    } finally {
+      setPushing(false);
+    }
+  };
+
+
   const generate = () => {
     if (!fullCode.trim()) return log("Nothing to generate — paste project code first.", "error");
     let parsed = parseMultiFile(fullCode);
