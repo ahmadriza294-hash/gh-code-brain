@@ -144,6 +144,7 @@ function buildPreview(files: FileMap, editMode: boolean, isStreaming = false): s
   if (!entryName) return "";
   const source = files[entryName];
   if (!source) return "";
+  const localScripts: string[] = [];
   let html = source.replace(/<link[^>]+href=["']([^"']+\.css)["'][^>]*>/gi, (full, href: string) => {
     const key = Object.keys(files).find((name) => name.endsWith(href.replace(/^\.?\//, "")));
     return key && files[key] ? `<style>\n${files[key]}\n</style>` : full;
@@ -151,9 +152,15 @@ function buildPreview(files: FileMap, editMode: boolean, isStreaming = false): s
   html = html.replace(/<script[^>]+src=["']([^"']+\.js)["'][^>]*>\s*<\/script>/gi, (full, src: string) => {
     if (isStreaming) return "";
     const key = Object.keys(files).find((name) => name.endsWith(src.replace(/^\.?\//, "")));
-    return key && files[key] ? `<script>\n${files[key]}\n<\/script>` : full;
+    if (!key || !files[key]) return full;
+    localScripts.push(files[key]);
+    return "";
   });
   if (isStreaming) html = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+  if (localScripts.length > 0) {
+    const scripts = `<script>\n${localScripts.join("\n\n")}\n<\/script>`;
+    html = html.includes("</body>") ? html.replace("</body>", `${scripts}</body>`) : `${html}${scripts}`;
+  }
   if (editMode) {
     const editorCss = `<style data-ghighais-editor>[data-gh-selected="true"]{outline:2px solid #00d98b!important;outline-offset:2px!important;resize:both!important;overflow:auto!important;cursor:move!important}</style>`;
     html = html.includes("</body>")
