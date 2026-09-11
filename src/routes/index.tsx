@@ -209,7 +209,9 @@ function Index() {
     setLogs((current) => [...current, { text: `> ${text}`, kind }]);
   }, []);
   const fileNames = Object.keys(files);
-  const preview = useMemo(() => buildPreview(files, editMode), [files, editMode]);
+  const streaming = Object.keys(streamFiles).length > 0;
+  const previewFiles = useMemo(() => (streaming ? { ...files, ...streamFiles } : files), [files, streamFiles, streaming]);
+  const preview = useMemo(() => buildPreview(previewFiles, editMode && !streaming), [previewFiles, editMode, streaming]);
   const field = "w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary";
 
   useEffect(() => {
