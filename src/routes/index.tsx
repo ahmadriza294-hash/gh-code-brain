@@ -189,6 +189,8 @@ function Index() {
   const [patchCode, setPatchCode] = useState("");
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [streamFiles, setStreamFiles] = useState<FileMap>({});
   const [history, setHistory] = useState<ChatLine[]>([]);
   const [token, setToken] = useState("");
   const [repo, setRepo] = useState("");
