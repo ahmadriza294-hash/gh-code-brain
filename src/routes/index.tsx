@@ -1,6 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useRef, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import { useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
+import { generateProject } from "@/lib/ai.functions";
+import { pushToGithub } from "@/lib/github";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -77,9 +80,16 @@ function buildPreview(files: FileMap): string {
 }
 
 function Index() {
-  const [tab, setTab] = useState<"build" | "patch">("build");
+  const [tab, setTab] = useState<"ai" | "build" | "patch">("ai");
   const [fullCode, setFullCode] = useState("");
   const [patchCode, setPatchCode] = useState("");
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [token, setToken] = useState("");
+  const [repo, setRepo] = useState("");
+  const [commitMsg, setCommitMsg] = useState("");
+  const [pushing, setPushing] = useState(false);
+  const askAi = useServerFn(generateProject);
   const [projectName, setProjectName] = useState("ghighais-project");
   const [files, setFiles] = useState<FileMap>({});
   const [logs, setLogs] = useState<{ text: string; kind: "info" | "success" | "error" }[]>([
@@ -92,6 +102,64 @@ function Index() {
 
   const fileNames = Object.keys(files);
   const preview = useMemo(() => buildPreview(files), [files]);
+
+  useEffect(() => {
+    const t = localStorage.getItem("gh_token");
+    const r = localStorage.getItem("gh_repo");
+    if (t) setToken(t);
+    if (r) setRepo(r);
+  }, []);
+
+  const runAi = async () => {
+    if (!aiPrompt.trim()) return log("Describe what you want to build or fix first.", "error");
+    const hasFiles = fileNames.length > 0;
+    setAiBusy(true);
+    log(hasFiles ? "Asking AI to fix the current project…" : "Asking AI to build a new project…");
+    try {
+      const context = hasFiles
+        ? Object.entries(files)
+            .map(([n, c]) => `${n}:\n${c}`)
+            .join("\n\n")
+            .slice(0, 55000)
+        : undefined;
+      const res = await askAi({
+        data: { prompt: aiPrompt, mode: hasFiles ? "fix" : "create", context },
+      });
+      let parsed = parseMultiFile(res.text);
+      if (Object.keys(parsed).length === 0) parsed = { "index.html": res.text };
+      setFiles((prev) => ({ ...prev, ...parsed }));
+      log(`AI delivered ${Object.keys(parsed).length} file(s): ${Object.keys(parsed).join(", ")}`, "success");
+    } catch (e) {
+      log(e instanceof Error ? e.message : "AI request failed.", "error");
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const push = async () => {
+    if (fileNames.length === 0) return log("Nothing to push yet.", "error");
+    if (!token.trim()) return log("Paste your GitHub token first.", "error");
+    const target = (repo.trim() || projectName).trim();
+    if (!target) return log("Enter a repository name.", "error");
+    setPushing(true);
+    localStorage.setItem("gh_token", token.trim());
+    localStorage.setItem("gh_repo", target);
+    try {
+      const out = await pushToGithub({
+        token: token.trim(),
+        repo: target,
+        files,
+        message: commitMsg,
+        onLog: (m) => log(m),
+      });
+      log(`Pushed to ${out.url} (${out.branch})`, "success");
+    } catch (e) {
+      log(e instanceof Error ? e.message : "Push failed.", "error");
+    } finally {
+      setPushing(false);
+    }
+  };
+
 
   const generate = () => {
     if (!fullCode.trim()) return log("Nothing to generate — paste project code first.", "error");
@@ -177,6 +245,9 @@ function Index() {
       <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
         <section className="flex flex-col overflow-hidden rounded-lg border border-border bg-card">
           <div className="flex border-b border-border">
+            <button className={tabClass(tab === "ai")} onClick={() => setTab("ai")}>
+              ✨ AI Prompt
+            </button>
             <button className={tabClass(tab === "build")} onClick={() => setTab("build")}>
               🏗️ Build New
             </button>
@@ -186,7 +257,42 @@ function Index() {
           </div>
 
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
-            {tab === "build" ? (
+            {tab === "ai" ? (
+              <>
+                <label className="block text-xs uppercase tracking-widest text-muted-foreground">
+                  Describe your app (or the fix you need)
+                </label>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  {fileNames.length > 0
+                    ? "Files are loaded, so the AI will fix / upgrade the current project."
+                    : "No files yet — the AI will build a brand new project instantly."}
+                </p>
+                <textarea
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  placeholder="e.g. Buat landing page toko kopi dengan menu, galeri, dan form pesanan"
+                  className={`${field} h-40 resize-y`}
+                />
+                <button
+                  onClick={runAi}
+                  disabled={aiBusy}
+                  className="w-full rounded-md border border-primary px-4 py-3 text-sm font-bold uppercase tracking-widest text-primary transition-all hover:bg-primary hover:text-primary-foreground hover:shadow-[0_0_15px_var(--primary)] disabled:opacity-50"
+                >
+                  {aiBusy ? "⏳ Working…" : fileNames.length > 0 ? "🛠️ Fix With AI" : "✨ Create With AI"}
+                </button>
+                {fileNames.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setFiles({});
+                      log("Workspace cleared.", "info");
+                    }}
+                    className="w-full rounded-md border border-border px-4 py-2 text-xs uppercase tracking-widest text-muted-foreground hover:text-foreground"
+                  >
+                    Clear workspace
+                  </button>
+                )}
+              </>
+            ) : tab === "build" ? (
               <>
                 <label className="block text-xs uppercase tracking-widest text-muted-foreground">
                   Paste full project code
@@ -255,6 +361,51 @@ function Index() {
             >
               📥 Download .zip
             </button>
+          </div>
+
+          <div className="space-y-2 border-t border-border p-4">
+            <label className="block text-xs uppercase tracking-widest text-muted-foreground">
+              Push to GitHub
+            </label>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Paste a personal access token with <span className="text-primary">repo</span> access. It stays
+              in this browser only and is used to push straight to your own account.
+            </p>
+            <input
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              type="password"
+              autoComplete="off"
+              placeholder="ghp_… personal access token"
+              className={field}
+            />
+            <input
+              value={repo}
+              onChange={(e) => setRepo(e.target.value)}
+              placeholder="repository name (created if missing)"
+              className={field}
+            />
+            <input
+              value={commitMsg}
+              onChange={(e) => setCommitMsg(e.target.value)}
+              placeholder="commit message (optional)"
+              className={field}
+            />
+            <button
+              onClick={push}
+              disabled={pushing}
+              className="w-full rounded-md border border-primary px-4 py-3 text-sm font-bold uppercase tracking-widest text-primary transition-all hover:bg-primary hover:text-primary-foreground disabled:opacity-50"
+            >
+              {pushing ? "⏳ Pushing…" : "🚀 Push to GitHub"}
+            </button>
+            <a
+              href="https://github.com/settings/tokens/new?scopes=repo&description=GHIGHAIS%20BRAIN"
+              target="_blank"
+              rel="noreferrer"
+              className="block text-center text-[11px] text-accent underline"
+            >
+              Create a token →
+            </a>
           </div>
         </section>
 
