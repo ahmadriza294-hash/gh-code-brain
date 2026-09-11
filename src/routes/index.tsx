@@ -362,6 +362,51 @@ function Index() {
               📥 Download .zip
             </button>
           </div>
+
+          <div className="space-y-2 border-t border-border p-4">
+            <label className="block text-xs uppercase tracking-widest text-muted-foreground">
+              Push to GitHub
+            </label>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Paste a personal access token with <span className="text-primary">repo</span> access. It stays
+              in this browser only and is used to push straight to your own account.
+            </p>
+            <input
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              type="password"
+              autoComplete="off"
+              placeholder="ghp_… personal access token"
+              className={field}
+            />
+            <input
+              value={repo}
+              onChange={(e) => setRepo(e.target.value)}
+              placeholder="repository name (created if missing)"
+              className={field}
+            />
+            <input
+              value={commitMsg}
+              onChange={(e) => setCommitMsg(e.target.value)}
+              placeholder="commit message (optional)"
+              className={field}
+            />
+            <button
+              onClick={push}
+              disabled={pushing}
+              className="w-full rounded-md border border-primary px-4 py-3 text-sm font-bold uppercase tracking-widest text-primary transition-all hover:bg-primary hover:text-primary-foreground disabled:opacity-50"
+            >
+              {pushing ? "⏳ Pushing…" : "🚀 Push to GitHub"}
+            </button>
+            <a
+              href="https://github.com/settings/tokens/new?scopes=repo&description=GHIGHAIS%20BRAIN"
+              target="_blank"
+              rel="noreferrer"
+              className="block text-center text-[11px] text-accent underline"
+            >
+              Create a token →
+            </a>
+          </div>
         </section>
 
         <section className="flex min-h-[420px] flex-col overflow-hidden rounded-lg border border-border bg-card">
