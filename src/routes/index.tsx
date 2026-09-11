@@ -47,7 +47,7 @@ type SelectedElement = { path: number[]; tag: string; label: string; width: numb
 type PreviewWidth = "100%" | "390px" | "768px";
 
 const STORAGE_KEY = "ghighais_workspace_v3";
-const FILE_HEADER = /^\s*(?:\/\/|#|<!--)?\s*([\w.\-/]+\.[a-zA-Z0-9]+)\s*:\s*(?:-->)?\s*$/;
+const FILE_HEADER = /^\s*(?:\/\/|#|<!--)?\s*((?:[\w.-]+\/)*[\w-]+\.[a-zA-Z0-9]+|\.[\w-]+)\s*:\s*(?:-->)?\s*$/;
 
 function parseMultiFile(text: string): FileMap {
   const lines = text.split(/\r?\n/);
