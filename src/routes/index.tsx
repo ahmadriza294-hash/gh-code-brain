@@ -345,6 +345,15 @@ function Index() {
             if (Object.keys(partial).length > 0) setStreamFiles(partial);
           }
           received += decoder.decode();
+          if (!received.trim()) {
+            lastError = "AI tidak mengirim hasil. Coba lagi sebentar.";
+            if (attempt < 2) {
+              log(`Hasil kosong, AI mencoba kembali (${attempt + 2}/3)…`);
+              await new Promise((resolve) => setTimeout(resolve, 1500 * 2 ** attempt));
+              continue;
+            }
+            throw new Error(lastError);
+          }
           return received;
         } catch (streamError) {
           lastError = streamError instanceof Error ? streamError.message : lastError;
