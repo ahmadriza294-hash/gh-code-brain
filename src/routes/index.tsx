@@ -77,6 +77,33 @@ function htmlEntry(files: FileMap) {
   );
 }
 
+// Memastikan hasil AI benar-benar utuh sebelum dipasang ke proyek.
+function validateProject(files: FileMap): string[] {
+  const issues: string[] = [];
+  const entry = htmlEntry(files);
+  if (!entry) {
+    issues.push("index.html tidak ada");
+    return issues;
+  }
+  const html = files[entry] ?? "";
+  if (!/<html[\s>]/i.test(html) || !/<\/html>/i.test(html)) issues.push("index.html belum lengkap");
+  if (!/<\/body>/i.test(html)) issues.push("body belum ditutup");
+  if (/TODO|lorem ipsum|placeholder/i.test(html)) issues.push("masih ada placeholder");
+
+  for (const [name, content] of Object.entries(files)) {
+    if (!name.endsWith(".js") && !name.endsWith(".css")) continue;
+    const open = (content.match(/\{/g) ?? []).length;
+    const close = (content.match(/\}/g) ?? []).length;
+    if (open !== close) issues.push(`${name} terpotong`);
+  }
+  const missing = [...html.matchAll(/(?:href|src)=["']\.?\/?([\w.-]+\.(?:css|js))["']/gi)]
+    .map((match) => match[1])
+    .filter((file): file is string => Boolean(file))
+    .filter((file) => !Object.keys(files).some((name) => name.endsWith(file)));
+  if (missing.length > 0) issues.push(`file tertaut hilang: ${[...new Set(missing)].join(", ")}`);
+  return issues;
+}
+
 const EDITOR_SCRIPT = String.raw`<script data-ghighais-editor>
 (() => {
   const send = (type, data = {}) => parent.postMessage({ source: 'ghighais-visual-editor', type, ...data }, '*');
@@ -284,22 +311,15 @@ function Index() {
     log(hasFiles ? "AI melanjutkan proyek aktif…" : "AI membuat proyek baru…");
     let received = "";
     let progressTimer: ReturnType<typeof setInterval> | undefined;
-    try {
-      const context = hasFiles
-        ? Object.entries(files).map(([name, content]) => `${name}:\n${content}`).join("\n\n").slice(0, 55000)
-        : undefined;
-      const aiHistory = history.slice(-12).map((line) => ({ role: line.role, content: line.content }));
-      const requestBody = JSON.stringify({ prompt, mode: hasFiles ? "fix" : "create", context, history: aiHistory });
-      progressTimer = setInterval(() => {
-        setProgress((current) => (current < 28 ? current + 1 : current));
-      }, 1800);
 
+    const streamOnce = async (body: string): Promise<string> => {
+      received = "";
       let lastError = "Permintaan AI gagal.";
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const response = await fetch("/api/ai/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: requestBody,
+          body,
         });
         if (!response.ok || !response.body) {
           lastError = (await response.text()) || lastError;
@@ -325,28 +345,80 @@ function Index() {
             if (Object.keys(partial).length > 0) setStreamFiles(partial);
           }
           received += decoder.decode();
-          break;
+          if (!received.trim()) {
+            lastError = "AI tidak mengirim hasil. Coba lagi sebentar.";
+            if (attempt < 2) {
+              log(`Hasil kosong, AI mencoba kembali (${attempt + 2}/3)…`);
+              await new Promise((resolve) => setTimeout(resolve, 1500 * 2 ** attempt));
+              continue;
+            }
+            throw new Error(lastError);
+          }
+          return received;
         } catch (streamError) {
           lastError = streamError instanceof Error ? streamError.message : lastError;
-          if (Object.keys(parseMultiFile(received)).length > 0) break;
+          if (Object.keys(parseMultiFile(received)).length > 0) return received;
           if (attempt >= 2) throw streamError;
           received = "";
           log(`Aliran terputus, AI mencoba kembali (${attempt + 2}/3)…`);
           await new Promise((resolve) => setTimeout(resolve, 1500 * 2 ** attempt));
         }
       }
-
       if (!received.trim()) throw new Error(lastError);
-      let parsed = parseMultiFile(received);
-      if (Object.keys(parsed).length === 0) parsed = { "index.html": received };
+      return received;
+    };
+
+    try {
+      const context = hasFiles
+        ? Object.entries(files).map(([name, content]) => `${name}:\n${content}`).join("\n\n").slice(0, 55000)
+        : undefined;
+      const aiHistory = history.slice(-12).map((line) => ({ role: line.role, content: line.content }));
+      progressTimer = setInterval(() => {
+        setProgress((current) => (current < 28 ? current + 1 : current));
+      }, 1800);
+
+      let text = await streamOnce(
+        JSON.stringify({ prompt, mode: hasFiles ? "fix" : "create", context, history: aiHistory }),
+      );
+      let parsed = parseMultiFile(text);
+      let issues = validateProject(parsed);
+
+      if (issues.length > 0) {
+        log(`Hasil belum lengkap (${issues.join("; ")}). AI memperbaiki otomatis…`);
+        const repairContext = Object.entries(parsed)
+          .map(([name, content]) => `${name}:\n${content}`)
+          .join("\n\n")
+          .slice(0, 55000);
+        const repairPrompt = `${prompt}\n\nHASIL SEBELUMNYA BELUM MEMENUHI PERMINTAAN. Masalah: ${issues.join("; ")}. Keluarkan ULANG seluruh file lengkap yang sudah benar, jalankan tanpa error, dan penuhi setiap detail permintaan di atas.`;
+        const repaired = await streamOnce(
+          JSON.stringify({ prompt: repairPrompt, mode: "fix", context: repairContext || context, history: aiHistory }),
+        );
+        const repairedFiles = parseMultiFile(repaired);
+        const repairedIssues = validateProject(repairedFiles);
+        if (repairedIssues.length < issues.length || repairedIssues.length === 0) {
+          text = repaired;
+          parsed = repairedFiles;
+          issues = repairedIssues;
+        }
+      }
+
+      if (Object.keys(parsed).length === 0) parsed = { "index.html": text };
       const delivered = Object.keys(parsed);
       setFiles((current) => ensureGitignore({ ...current, ...parsed }).files);
       setProgress(100);
       setHistory((current) => [
         ...current,
-        { id: crypto.randomUUID(), role: "assistant", content: `Selesai — ${delivered.length} file diperbarui. Proyek aktif tetap dipertahankan.`, files: delivered },
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content:
+            issues.length > 0
+              ? `Selesai dengan catatan — ${delivered.length} file diperbarui (${issues.join("; ")}).`
+              : `Selesai — ${delivered.length} file diperbarui sesuai instruksi. Proyek aktif tetap dipertahankan.`,
+          files: delivered,
+        },
       ]);
-      log(`AI memperbarui: ${delivered.join(", ")}`, "success");
+      log(`AI memperbarui: ${delivered.join(", ")}`, issues.length > 0 ? "info" : "success");
     } catch (error) {
       const partial = parseMultiFile(received);
       if (Object.keys(partial).length > 0) {

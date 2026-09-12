@@ -61,7 +61,44 @@ export const Route = createFileRoute("/api/ai/generate")({
             },
           });
 
-          return new Response(result.textStream, {
+          // Tarik potongan pertama di sini supaya kegagalan gateway (402/429/…)
+          // menjadi status HTTP yang jelas, bukan aliran 200 yang kosong.
+          const iterator = result.fullStream[Symbol.asyncIterator]();
+          let firstText: string | undefined;
+          for (;;) {
+            const next = await iterator.next();
+            if (next.done) break;
+            const part = next.value as { type: string; text?: string; error?: unknown };
+            if (part.type === "error") throw part.error;
+            if (part.type === "text-delta" && part.text) {
+              firstText = part.text;
+              break;
+            }
+          }
+
+          const stream = new ReadableStream<string>({
+            async start(controller) {
+              try {
+                if (firstText) controller.enqueue(firstText);
+                for (;;) {
+                  const next = await iterator.next();
+                  if (next.done) break;
+                  const part = next.value as { type: string; text?: string; error?: unknown };
+                  if (part.type === "error") {
+                    console.error(part.error);
+                    break;
+                  }
+                  if (part.type === "text-delta" && part.text) controller.enqueue(part.text);
+                }
+                controller.close();
+              } catch (streamError) {
+                console.error(streamError);
+                controller.close();
+              }
+            },
+          }).pipeThrough(new TextEncoderStream());
+
+          return new Response(stream, {
             headers: {
               "Content-Type": "text/plain; charset=utf-8",
               "Cache-Control": "no-cache, no-transform",
@@ -77,7 +114,8 @@ export const Route = createFileRoute("/api/ai/generate")({
           const message = error instanceof Error ? error.message : "Permintaan AI gagal.";
           console.error(`AI gateway failed${status ? ` [${status}]` : ""}: ${message}`);
           if (status === 429) return new Response("AI sedang sibuk. Tunggu sebentar lalu coba lagi.", { status: 429 });
-          if (status === 402) return new Response(message || "Kredit AI habis.", { status: 402 });
+          if (status === 402)
+            return new Response("Kredit AI workspace habis. Tambahkan kredit untuk melanjutkan generate.", { status: 402 });
           if (status === 403) return new Response(message || "AI dinonaktifkan oleh kebijakan workspace.", { status: 403 });
           if (status === 401) return new Response("Konfigurasi AI tidak valid.", { status: 401 });
           return new Response(message, { status: 500 });
