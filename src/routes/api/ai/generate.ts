@@ -63,16 +63,32 @@ export const Route = createFileRoute("/api/ai/generate")({
 
           // Tarik potongan pertama di sini supaya kegagalan gateway (402/429/…)
           // menjadi status HTTP yang jelas, bukan aliran 200 yang kosong.
-          const iterator = result.textStream[Symbol.asyncIterator]();
-          const first = await iterator.next();
+          const iterator = result.fullStream[Symbol.asyncIterator]();
+          let firstText: string | undefined;
+          for (;;) {
+            const next = await iterator.next();
+            if (next.done) break;
+            const part = next.value as { type: string; text?: string; error?: unknown };
+            if (part.type === "error") throw part.error;
+            if (part.type === "text-delta" && part.text) {
+              firstText = part.text;
+              break;
+            }
+          }
+
           const stream = new ReadableStream<string>({
             async start(controller) {
               try {
-                if (!first.done && first.value) controller.enqueue(first.value);
+                if (firstText) controller.enqueue(firstText);
                 for (;;) {
                   const next = await iterator.next();
                   if (next.done) break;
-                  controller.enqueue(next.value);
+                  const part = next.value as { type: string; text?: string; error?: unknown };
+                  if (part.type === "error") {
+                    console.error(part.error);
+                    break;
+                  }
+                  if (part.type === "text-delta" && part.text) controller.enqueue(part.text);
                 }
                 controller.close();
               } catch (streamError) {
