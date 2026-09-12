@@ -61,7 +61,28 @@ export const Route = createFileRoute("/api/ai/generate")({
             },
           });
 
-          return new Response(result.textStream, {
+          // Tarik potongan pertama di sini supaya kegagalan gateway (402/429/…)
+          // menjadi status HTTP yang jelas, bukan aliran 200 yang kosong.
+          const iterator = result.textStream[Symbol.asyncIterator]();
+          const first = await iterator.next();
+          const stream = new ReadableStream<string>({
+            async start(controller) {
+              try {
+                if (!first.done && first.value) controller.enqueue(first.value);
+                for (;;) {
+                  const next = await iterator.next();
+                  if (next.done) break;
+                  controller.enqueue(next.value);
+                }
+                controller.close();
+              } catch (streamError) {
+                console.error(streamError);
+                controller.close();
+              }
+            },
+          }).pipeThrough(new TextEncoderStream());
+
+          return new Response(stream, {
             headers: {
               "Content-Type": "text/plain; charset=utf-8",
               "Cache-Control": "no-cache, no-transform",
