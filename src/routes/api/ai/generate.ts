@@ -114,7 +114,8 @@ export const Route = createFileRoute("/api/ai/generate")({
           const message = error instanceof Error ? error.message : "Permintaan AI gagal.";
           console.error(`AI gateway failed${status ? ` [${status}]` : ""}: ${message}`);
           if (status === 429) return new Response("AI sedang sibuk. Tunggu sebentar lalu coba lagi.", { status: 429 });
-          if (status === 402) return new Response(message || "Kredit AI habis.", { status: 402 });
+          if (status === 402)
+            return new Response("Kredit AI workspace habis. Tambahkan kredit untuk melanjutkan generate.", { status: 402 });
           if (status === 403) return new Response(message || "AI dinonaktifkan oleh kebijakan workspace.", { status: 403 });
           if (status === 401) return new Response("Konfigurasi AI tidak valid.", { status: 401 });
           return new Response(message, { status: 500 });
