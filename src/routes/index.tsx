@@ -284,22 +284,15 @@ function Index() {
     log(hasFiles ? "AI melanjutkan proyek aktif…" : "AI membuat proyek baru…");
     let received = "";
     let progressTimer: ReturnType<typeof setInterval> | undefined;
-    try {
-      const context = hasFiles
-        ? Object.entries(files).map(([name, content]) => `${name}:\n${content}`).join("\n\n").slice(0, 55000)
-        : undefined;
-      const aiHistory = history.slice(-12).map((line) => ({ role: line.role, content: line.content }));
-      const requestBody = JSON.stringify({ prompt, mode: hasFiles ? "fix" : "create", context, history: aiHistory });
-      progressTimer = setInterval(() => {
-        setProgress((current) => (current < 28 ? current + 1 : current));
-      }, 1800);
 
+    const streamOnce = async (body: string): Promise<string> => {
+      received = "";
       let lastError = "Permintaan AI gagal.";
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const response = await fetch("/api/ai/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: requestBody,
+          body,
         });
         if (!response.ok || !response.body) {
           lastError = (await response.text()) || lastError;
@@ -325,28 +318,71 @@ function Index() {
             if (Object.keys(partial).length > 0) setStreamFiles(partial);
           }
           received += decoder.decode();
-          break;
+          return received;
         } catch (streamError) {
           lastError = streamError instanceof Error ? streamError.message : lastError;
-          if (Object.keys(parseMultiFile(received)).length > 0) break;
+          if (Object.keys(parseMultiFile(received)).length > 0) return received;
           if (attempt >= 2) throw streamError;
           received = "";
           log(`Aliran terputus, AI mencoba kembali (${attempt + 2}/3)…`);
           await new Promise((resolve) => setTimeout(resolve, 1500 * 2 ** attempt));
         }
       }
-
       if (!received.trim()) throw new Error(lastError);
-      let parsed = parseMultiFile(received);
-      if (Object.keys(parsed).length === 0) parsed = { "index.html": received };
+      return received;
+    };
+
+    try {
+      const context = hasFiles
+        ? Object.entries(files).map(([name, content]) => `${name}:\n${content}`).join("\n\n").slice(0, 55000)
+        : undefined;
+      const aiHistory = history.slice(-12).map((line) => ({ role: line.role, content: line.content }));
+      progressTimer = setInterval(() => {
+        setProgress((current) => (current < 28 ? current + 1 : current));
+      }, 1800);
+
+      let text = await streamOnce(
+        JSON.stringify({ prompt, mode: hasFiles ? "fix" : "create", context, history: aiHistory }),
+      );
+      let parsed = parseMultiFile(text);
+      let issues = validateProject(parsed);
+
+      if (issues.length > 0) {
+        log(`Hasil belum lengkap (${issues.join("; ")}). AI memperbaiki otomatis…`);
+        const repairContext = Object.entries(parsed)
+          .map(([name, content]) => `${name}:\n${content}`)
+          .join("\n\n")
+          .slice(0, 55000);
+        const repairPrompt = `${prompt}\n\nHASIL SEBELUMNYA BELUM MEMENUHI PERMINTAAN. Masalah: ${issues.join("; ")}. Keluarkan ULANG seluruh file lengkap yang sudah benar, jalankan tanpa error, dan penuhi setiap detail permintaan di atas.`;
+        const repaired = await streamOnce(
+          JSON.stringify({ prompt: repairPrompt, mode: "fix", context: repairContext || context, history: aiHistory }),
+        );
+        const repairedFiles = parseMultiFile(repaired);
+        const repairedIssues = validateProject(repairedFiles);
+        if (repairedIssues.length < issues.length || repairedIssues.length === 0) {
+          text = repaired;
+          parsed = repairedFiles;
+          issues = repairedIssues;
+        }
+      }
+
+      if (Object.keys(parsed).length === 0) parsed = { "index.html": text };
       const delivered = Object.keys(parsed);
       setFiles((current) => ensureGitignore({ ...current, ...parsed }).files);
       setProgress(100);
       setHistory((current) => [
         ...current,
-        { id: crypto.randomUUID(), role: "assistant", content: `Selesai — ${delivered.length} file diperbarui. Proyek aktif tetap dipertahankan.`, files: delivered },
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content:
+            issues.length > 0
+              ? `Selesai dengan catatan — ${delivered.length} file diperbarui (${issues.join("; ")}).`
+              : `Selesai — ${delivered.length} file diperbarui sesuai instruksi. Proyek aktif tetap dipertahankan.`,
+          files: delivered,
+        },
       ]);
-      log(`AI memperbarui: ${delivered.join(", ")}`, "success");
+      log(`AI memperbarui: ${delivered.join(", ")}`, issues.length > 0 ? "info" : "success");
     } catch (error) {
       const partial = parseMultiFile(received);
       if (Object.keys(partial).length > 0) {
